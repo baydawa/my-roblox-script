@@ -214,6 +214,7 @@ local Tabs = {
     Seeds    = Window:AddTab({ Title = "Seeds/Drops", Icon = "sprout" }),
     Garden   = Window:AddTab({ Title = "Garden",      Icon = "flower" }),
     Boss     = Window:AddTab({ Title = "World Boss",  Icon = "skull" }),
+    Summon   = Window:AddTab({ Title = "Summon",      Icon = "sparkles" }),
     Rewards  = Window:AddTab({ Title = "Rewards",     Icon = "gift" }),
     Upgrade  = Window:AddTab({ Title = "Upgrade",     Icon = "trending-up" }),
     Travel   = Window:AddTab({ Title = "Travel",      Icon = "map" }),
@@ -247,6 +248,7 @@ local flags = {
     seed        = false,
     garden      = false,
     boss        = false,
+    summon      = false,
     walker      = false,
     farmlock    = false,
     claim       = false,
@@ -1069,6 +1071,9 @@ safeSection("Farm Stage", function()
             local clearStage = -1
             local lockedTargetCF = nil
             local lockedStage = nil
+            local wasInBoss = false
+            local noEnemySince = nil
+            local lastSpawnNudge = 0
 
             local noclipConn
             pcall(function()
@@ -1140,21 +1145,37 @@ safeSection("Farm Stage", function()
                 end
 
                 if inRaid or bossBusy then
+                    wasInBoss = true
+                    noEnemySince = nil
                     lockedTargetCF = nil
                     farmSet("Paused (boss)")
                 elseif isBankingSeeds then
+                    noEnemySince = nil
                     lockedTargetCF = nil
                     farmSet("Seed bag full -> Returning home to bank seeds...")
                 elseif seedBank and isSeedBagFull() then
+                    noEnemySince = nil
                     lockedTargetCF = nil
                     farmSet("Seed bag full -> Returning home to bank seeds...")
                     triggerSeedBank()
                 elseif curW ~= farmWorld then
+                    noEnemySince = nil
                     lockedTargetCF = nil
                     farmSet(("You are in world %d, target world %d (use Travel > Set World)"):format(curW, farmWorld))
                 elseif hrp then
                     local s = (run < farmStage) and (run + 1) or farmStage
                     local center = stageCenter(s)
+
+                    if wasInBoss then
+                        wasInBoss = false
+                        lockedTargetCF = nil
+                        lockedStage = nil
+                        noEnemySince = os.clock()
+                        if ECtrl and ECtrl.Farm and type(ECtrl.Farm.start) == "function" and run >= farmStage and ECtrl.Farm.stage ~= run then
+                            pcall(function() ECtrl.Farm.start(run) end)
+                            elevate()
+                        end
+                    end
 
                     local enemyPos
                     if ECtrl and type(ECtrl.GetNearestAttackable) == "function" then
@@ -1175,6 +1196,32 @@ safeSection("Farm Stage", function()
                                 if okP and piv then
                                     local d = (piv - center).Magnitude
                                     if d < bestD then bestD = d; enemyPos = piv end
+                                end
+                            end
+                        end
+                    end
+
+                    if enemyPos then
+                        noEnemySince = nil
+                    else
+                        noEnemySince = noEnemySince or os.clock()
+                        if (os.clock() - noEnemySince >= 1.2 or (stState and not stState.spawned)) and os.clock() - lastSpawnNudge >= 5.0 then
+                            lastSpawnNudge = os.clock()
+                            lockedTargetCF = nil
+                            lockedStage = nil
+                            if ECtrl and ECtrl.Farm and type(ECtrl.Farm.start) == "function" and run >= farmStage and ECtrl.Farm.stage ~= run then
+                                pcall(function() ECtrl.Farm.start(run) end)
+                                elevate()
+                            end
+                            if stState and not stState.spawned then
+                                hrp.CFrame = CFrame.new(center.X, center.Y + 3, center.Z + 45)
+                                task.wait(0.18)
+                                if flags.walker and LocalPlayer:GetAttribute("InRaid") ~= true and not bossActive then
+                                    local h2 = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                                    if h2 then
+                                        h2.CFrame = CFrame.new(center.X, center.Y + 3, center.Z - 5)
+                                        task.wait(0.18)
+                                    end
                                 end
                             end
                         end
@@ -1695,7 +1742,6 @@ safeSection("World Boss", function()
                     elevate()
                     doneKey = phaseKey
                     entered, outSince, tries, lastTry = false, nil, 0, 0
-                    bossActive = false
                     setStatus("Boss defeated -> Left room immediately, back to farm")
                     local back = returnCF or lastFarmCF
                     if hrp and back then hrp.CFrame = back end
@@ -1707,6 +1753,7 @@ safeSection("World Boss", function()
                     local nhrp = hrpOf()
                     if nhrp and back then nhrp.CFrame = back end
                     returnCF = nil
+                    bossActive = false
                 elseif inRaid and dead then
                     fire("RaidRevealDone")
                     fire("RaidLeave")
@@ -1834,6 +1881,166 @@ safeSection("World Boss", function()
                 task.wait(0.15)
             end
             if raidEndConn then pcall(function() raidEndConn:Disconnect() end) end
+        end)
+    end })
+end)
+
+safeSection("Summon", function()
+    local SummonCfg
+    pcall(function() SummonCfg = require(Shared.Configs.SummonConfig) end)
+    elevate()
+
+    local summonStatus = Tabs.Summon:AddParagraph({ Title = "Summon Status", Content = "idle" })
+    local totalRolls = 0
+    local lastGot = "none"
+
+    local function updateSummonStatus(msg)
+        local scrolls = tonumber(LocalPlayer:GetAttribute("Scrolls")) or 0
+        pcall(function()
+            summonStatus:SetDesc(("Scrolls: %d | Rolls: %d | Last: %s | %s"):format(scrolls, totalRolls, lastGot, msg or "idle"))
+        end)
+    end
+    updateSummonStatus("idle")
+
+    local summonMode = "Auto (x10 if >=10 else x1)"
+    Tabs.Summon:AddDropdown("SummonMode", {
+        Title = "Summon Mode",
+        Values = { "Auto (x10 if >=10 else x1)", "x10 Only", "x1 Only" },
+        Default = "Auto (x10 if >=10 else x1)",
+        Callback = function(v) summonMode = v end
+    })
+
+    local stopGrade = "None"
+    Tabs.Summon:AddDropdown("SummonStopGrade", {
+        Title = "Stop Auto Summon on Grade",
+        Values = { "None", "A", "S", "SS", "SSS", "RAID", "EXCLUSIVE" },
+        Default = "None",
+        Callback = function(v) stopGrade = v end
+    })
+
+    local autoEquipSummons = false
+    Tabs.Summon:AddToggle("SummonEquipBest", {
+        Title = "Auto Equip Best Summons",
+        Default = false,
+        Callback = function(v) autoEquipSummons = v end
+    })
+
+    local summonDelay = 0.4
+    Tabs.Summon:AddSlider("SummonDelay", {
+        Title = "Summon Delay (s)",
+        Default = 0.4, Min = 0.2, Max = 3.0, Rounding = 1,
+        Callback = function(v) summonDelay = v end
+    })
+
+    local function doSummonOnce(count)
+        local ok, res = invoke("Summon", count)
+        if ok and type(res) == "table" and res.ok and type(res.results) == "table" then
+            totalRolls = totalRolls + #res.results
+            local summary = {}
+            local hitStop = false
+            local stopIdx = (stopGrade ~= "None" and SummonCfg and SummonCfg.GradeIndex) and SummonCfg.GradeIndex(stopGrade) or nil
+            elevate()
+            for _, item in ipairs(res.results) do
+                local g = tostring(item.g or "?")
+                local id = tostring(item.id or item.name or "?")
+                table.insert(summary, id .. "[" .. g .. "]")
+                if stopIdx and SummonCfg and SummonCfg.GradeIndex then
+                    if SummonCfg.GradeIndex(g) >= stopIdx then
+                        hitStop = true
+                    end
+                end
+            end
+            elevate()
+            lastGot = table.concat(summary, ", ")
+            if #lastGot > 60 then lastGot = lastGot:sub(1, 57) .. "..." end
+            if autoEquipSummons then
+                invoke("EquipBestSummons")
+            end
+            updateSummonStatus(hitStop and ("Stopped on grade >= " .. stopGrade) or "ok")
+            return true, hitStop, nil
+        end
+        local reason = (type(res) == "table" and res.reason) or "failed"
+        updateSummonStatus("Failed: " .. tostring(reason))
+        return false, false, reason
+    end
+
+    local autoSummonToggle
+    autoSummonToggle = Tabs.Summon:AddToggle("AutoSummon", {
+        Title = "Auto Summon",
+        Default = false,
+        Callback = function(v)
+            flags.summon = v
+            if not v then updateSummonStatus("off"); return end
+            task.spawn(function()
+                elevate()
+                while flags.summon do
+                    local scrolls = tonumber(LocalPlayer:GetAttribute("Scrolls")) or 0
+                    local multiCount = (SummonCfg and SummonCfg.MultiCount) or 10
+                    local count = 1
+                    if summonMode == "x10 Only" then
+                        if scrolls < multiCount then
+                            updateSummonStatus("Waiting for " .. multiCount .. " Scrolls...")
+                            task.wait(1)
+                            continue
+                        end
+                        count = multiCount
+                    elseif summonMode == "x1 Only" then
+                        if scrolls < 1 then
+                            updateSummonStatus("Out of Scrolls")
+                            flags.summon = false
+                            pcall(function() autoSummonToggle:SetValue(false) end)
+                            break
+                        end
+                        count = 1
+                    else
+                        if scrolls < 1 then
+                            updateSummonStatus("Out of Scrolls")
+                            flags.summon = false
+                            pcall(function() autoSummonToggle:SetValue(false) end)
+                            break
+                        end
+                        count = (scrolls >= multiCount) and multiCount or 1
+                    end
+
+                    local ok, hitStop, reason = doSummonOnce(count)
+                    if hitStop then
+                        flags.summon = false
+                        pcall(function() autoSummonToggle:SetValue(false) end)
+                        notify("Summon", "Stopped on grade >= " .. stopGrade)
+                        break
+                    end
+                    if not ok and (reason == "NoScrolls" or reason == "NoSlots") then
+                        flags.summon = false
+                        pcall(function() autoSummonToggle:SetValue(false) end)
+                        notify("Summon", tostring(reason))
+                        break
+                    end
+                    task.wait(math.max(summonDelay, 0.2))
+                end
+            end)
+        end
+    })
+
+    Tabs.Summon:AddButton({ Title = "Summon x1", Callback = function()
+        task.spawn(function()
+            elevate()
+            doSummonOnce(1)
+        end)
+    end })
+
+    Tabs.Summon:AddButton({ Title = "Summon x10", Callback = function()
+        task.spawn(function()
+            elevate()
+            local multiCount = (SummonCfg and SummonCfg.MultiCount) or 10
+            doSummonOnce(multiCount)
+        end)
+    end })
+
+    Tabs.Summon:AddButton({ Title = "Equip Best Summons", Callback = function()
+        task.spawn(function()
+            elevate()
+            local ok = invoke("EquipBestSummons")
+            notify("Summon", ok and "Equipped best summons" or "Failed to equip best")
         end)
     end })
 end)
