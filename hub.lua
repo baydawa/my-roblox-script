@@ -20,19 +20,32 @@ local function elevate()
 end
 elevate()
 
--- Clean up any older Pirate Hub window so re-executing never stacks duplicate UIs
-pcall(function()
-    for _, gui in ipairs(CoreGui:GetChildren()) do
-        if gui:IsA("ScreenGui") and gui.Name == "ScreenGui" then
-            for _, d in ipairs(gui:GetDescendants()) do
-                if d:IsA("TextLabel") and d.Text == "Pirate Hub" then
+-- Clean up any older Pirate Hub window / toggle button so re-executing never stacks duplicate UIs
+local uiRoots = { CoreGui }
+if type(gethui) == "function" then
+    local okHui, hui = pcall(gethui)
+    if okHui and typeof(hui) == "Instance" then
+        table.insert(uiRoots, hui)
+    end
+end
+for _, root in ipairs(uiRoots) do
+    pcall(function()
+        for _, gui in ipairs(root:GetChildren()) do
+            if gui:IsA("ScreenGui") then
+                if gui.Name == "_PirateHubToggleGui" then
                     gui:Destroy()
-                    break
+                elseif gui.Name == "ScreenGui" then
+                    for _, d in ipairs(gui:GetDescendants()) do
+                        if d:IsA("TextLabel") and d.Text == "Pirate Hub" then
+                            gui:Destroy()
+                            break
+                        end
+                    end
                 end
             end
         end
-    end
-end)
+    end)
+end
 
 ---------------------------------------------------------------- Net & Shared Modules
 local Shared = ReplicatedStorage:WaitForChild("Shared")
@@ -77,8 +90,22 @@ local function hrpOf()
 end
 
 ---------------------------------------------------------------- UI
-local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
-elevate()
+local Fluent
+for attempt = 1, 3 do
+    local okF, resF = pcall(function()
+        return loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
+    end)
+    elevate()
+    if okF and type(resF) == "table" then
+        Fluent = resF
+        break
+    end
+    task.wait(0.5)
+end
+if not Fluent then
+    warn("[Pirate Hub] Failed to load Fluent UI library")
+    return
+end
 
 local Window = Fluent:CreateWindow({
     Title       = "Pirate Hub",
@@ -89,6 +116,96 @@ local Window = Fluent:CreateWindow({
     Theme       = "Dark",
     MinimizeKey = Enum.KeyCode.RightControl,
 })
+
+pcall(function()
+    if Fluent.GUI and Fluent.GUI:IsA("ScreenGui") then
+        Fluent.GUI.DisplayOrder = 999999
+        Fluent.GUI.ResetOnSpawn = false
+        Fluent.GUI.IgnoreGuiInset = true
+        Fluent.GUI.Enabled = true
+    end
+end)
+
+-- Keep window inside viewport and provide a draggable floating toggle button so UI is never lost
+local uiUnloaded = false
+local toggleGui = nil
+local function setupUiGuard()
+    elevate()
+    local parentRoot = (Fluent.GUI and Fluent.GUI.Parent) or CoreGui
+    local okHui, hui = pcall(function() return type(gethui) == "function" and gethui() or nil end)
+    if okHui and typeof(hui) == "Instance" then parentRoot = hui end
+
+    toggleGui = Instance.new("ScreenGui")
+    toggleGui.Name = "_PirateHubToggleGui"
+    toggleGui.DisplayOrder = 999999
+    toggleGui.ResetOnSpawn = false
+    toggleGui.IgnoreGuiInset = true
+    toggleGui.Parent = parentRoot
+
+    local btn = Instance.new("TextButton")
+    btn.Name = "TogglePirateHub"
+    btn.Size = UDim2.fromOffset(110, 32)
+    btn.Position = UDim2.new(0, 16, 0.5, -16)
+    btn.BackgroundColor3 = Color3.fromRGB(28, 30, 38)
+    btn.BorderSizePixel = 0
+    btn.Text = "Pirate Hub"
+    btn.TextColor3 = Color3.fromRGB(240, 240, 245)
+    btn.TextSize = 14
+    btn.Font = Enum.Font.GothamBold
+    btn.Active = true
+    btn.Draggable = true
+    btn.Parent = toggleGui
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 8)
+    corner.Parent = btn
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = Color3.fromRGB(90, 165, 255)
+    stroke.Thickness = 1.5
+    stroke.Parent = btn
+
+    btn.MouseButton1Click:Connect(function()
+        elevate()
+        if uiUnloaded then return end
+        pcall(function()
+            if Fluent.GUI and Fluent.GUI:IsA("ScreenGui") then
+                Fluent.GUI.Enabled = true
+            end
+            if type(Window.Minimize) == "function" then
+                Window:Minimize()
+            elseif Window.Root and Window.Root:IsA("GuiObject") then
+                Window.Root.Visible = not Window.Root.Visible
+            end
+        end)
+    end)
+
+    task.spawn(function()
+        while not uiUnloaded do
+            task.wait(1)
+            elevate()
+            pcall(function()
+                if Fluent.GUI and Fluent.GUI:IsA("ScreenGui") then
+                    if not Fluent.GUI.Enabled then Fluent.GUI.Enabled = true end
+                    if Fluent.GUI.DisplayOrder < 999999 then Fluent.GUI.DisplayOrder = 999999 end
+                end
+                local cam = Workspace.CurrentCamera
+                local root = Window and Window.Root
+                if cam and root and root:IsA("GuiObject") and root.Visible then
+                    local vp = cam.ViewportSize
+                    if vp.X > 100 and vp.Y > 100 then
+                        local pos = root.AbsolutePosition
+                        local sz = root.AbsoluteSize
+                        if pos.X > vp.X - 40 or pos.Y > vp.Y - 40 or pos.X + sz.X < 40 or pos.Y + sz.Y < 40 then
+                            root.Position = UDim2.fromOffset(math.max(20, (vp.X - sz.X) * 0.5), math.max(20, (vp.Y - sz.Y) * 0.5))
+                        end
+                    end
+                end
+            end)
+        end
+    end)
+end
+pcall(setupUiGuard)
 
 local Tabs = {
     Main     = Window:AddTab({ Title = "Main",        Icon = "swords" }),
@@ -1924,6 +2041,7 @@ safeSection("Misc", function()
 
     Tabs.Misc:AddButton({ Title = "Unload", Callback = function()
         elevate()
+        uiUnloaded = true
         for k in pairs(flags) do flags[k] = false end
         pcall(function()
             if cachedECtrl and cachedECtrl._origApplyDamage then
@@ -1931,6 +2049,7 @@ safeSection("Misc", function()
                 cachedECtrl._pirateInstaHooked = nil
             end
         end)
+        pcall(function() if toggleGui then toggleGui:Destroy() end end)
         Fluent:Destroy()
     end })
 end)
