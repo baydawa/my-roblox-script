@@ -1501,10 +1501,13 @@ safeSection("World Boss", function()
 
     local bossWant = {}
     for _, b in ipairs(bossValues) do bossWant[b] = true end
-    local bossStand = 6
+    local bossStand  = 6
+    local bossSkills = true
 
     Tabs.Boss:AddSlider("BossStand", { Title = "Stand distance from boss (studs)", Min = 0, Max = 20, Default = 6, Rounding = 0,
         Callback = function(v) bossStand = v end })
+    Tabs.Boss:AddToggle("BossSkills", { Title = "Auto Use All Skills on Boss (Special / Utility / Haki)", Default = true,
+        Callback = function(v) bossSkills = v end })
     local bossStatus = Tabs.Boss:AddParagraph({ Title = "Status", Content = "idle" })
     local function setStatus(t)
         elevate()
@@ -1636,16 +1639,29 @@ safeSection("World Boss", function()
                             attackLoop = true
                             task.spawn(function()
                                 elevate()
-                                local sig
+                                local sig, skillSigs
+                                local lastBossSkill = 0
                                 pcall(function()
                                     local CS = require(Shared.Client.ClientSignals)
                                     sig = { toggle = CS:Get("AutoClickToggle"), manual = CS:Get("ManualAttack") }
+                                    skillSigs = {
+                                        special = CS:Get("SpecialActivate"),
+                                        utility = CS:Get("UtilityActivate"),
+                                        haki    = CS:Get("HakiActivate"),
+                                    }
                                     sig.toggle:Fire(true)
                                 end)
                                 elevate()
                                 while flags.boss and LocalPlayer:GetAttribute("InRaid") == true and LocalPlayer:GetAttribute("Downed") ~= true and not isBossDead(Workspace:GetAttribute("RaidState"), Workspace:GetAttribute("RaidBossId"), tostring(Workspace:GetAttribute("RaidPhaseEnd")), true) do
                                     if sig then pcall(function() sig.manual:Fire() end); elevate() end
                                     fire("AttackTick", true)
+                                    if bossSkills and skillSigs and os.clock() - lastBossSkill > 0.8 then
+                                        lastBossSkill = os.clock()
+                                        pcall(function() skillSigs.special:Fire() end)
+                                        pcall(function() skillSigs.utility:Fire() end)
+                                        pcall(function() skillSigs.haki:Fire() end)
+                                        elevate()
+                                    end
                                     task.wait(math.max(clickRate, 0.1))
                                 end
                                 if sig and not flags.click then pcall(function() sig.toggle:Fire(false) end); elevate() end
