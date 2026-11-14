@@ -141,7 +141,47 @@ local flags = {
 local bossActive      = false -- true while going to or fighting a World Boss
 local seedPickupCF    = nil   -- temporary CFrame override while AutoSeed is picking up a seed
 local seedPickupUntil = 0
+local seedBank        = true  -- auto EndRun to bank seeds when RunSeeds >= RunSeedCap or BagFull
+local isBankingSeeds  = false -- true while EndRun is warping player back to bank seeds
+local lastBankAt      = 0
 local clickRate       = 0.15
+
+local function isSeedBagFull()
+    local cap = tonumber(LocalPlayer:GetAttribute("RunSeedCap")) or 0
+    local cur = tonumber(LocalPlayer:GetAttribute("RunSeeds")) or 0
+    return cap > 0 and cur >= cap
+end
+
+local function triggerSeedBank()
+    if isBankingSeeds or (os.clock() - lastBankAt) < 2.5 then return false end
+    local runStage = tonumber(LocalPlayer:GetAttribute("RunStage")) or 0
+    local runSeeds = tonumber(LocalPlayer:GetAttribute("RunSeeds")) or 0
+    if runStage <= 0 and runSeeds <= 0 then return false end
+
+    isBankingSeeds = true
+    lastBankAt = os.clock()
+    seedPickupCF = nil
+    seedPickupUntil = 0
+
+    pcall(function()
+        local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+        if hum then hum.PlatformStand = false end
+    end)
+
+    fire("EndRun")
+    local t0 = os.clock()
+    while os.clock() - t0 < 3.5 do
+        local rs = tonumber(LocalPlayer:GetAttribute("RunStage")) or 0
+        local sd = tonumber(LocalPlayer:GetAttribute("RunSeeds")) or 0
+        if rs == 0 and sd == 0 then
+            break
+        end
+        task.wait(0.15)
+    end
+    task.wait(0.35)
+    isBankingSeeds = false
+    return true
+end
 
 local function loop(flag, delayFn, fn)
     task.spawn(function()
@@ -916,6 +956,12 @@ safeSection("Farm Stage", function()
             local noclipConn
             pcall(function()
                 noclipConn = RunService.Heartbeat:Connect(function()
+                    if isBankingSeeds then
+                        local c = LocalPlayer.Character
+                        local hum = c and c:FindFirstChildOfClass("Humanoid")
+                        if hum and hum.PlatformStand then hum.PlatformStand = false end
+                        return
+                    end
                     local activeSeedCF = (seedPickupCF and os.clock() < seedPickupUntil) and seedPickupCF or nil
                     local desiredCF = activeSeedCF or lockedTargetCF
                     if not flags.walker or not desiredCF then return end
@@ -979,6 +1025,13 @@ safeSection("Farm Stage", function()
                 if inRaid or bossBusy then
                     lockedTargetCF = nil
                     farmSet("Paused (boss)")
+                elseif isBankingSeeds then
+                    lockedTargetCF = nil
+                    farmSet("Seed bag full -> Returning home to bank seeds...")
+                elseif seedBank and isSeedBagFull() then
+                    lockedTargetCF = nil
+                    farmSet("Seed bag full -> Returning home to bank seeds...")
+                    triggerSeedBank()
                 elseif curW ~= farmWorld then
                     lockedTargetCF = nil
                     farmSet(("You are in world %d, target world %d (use Travel > Set World)"):format(curW, farmWorld))
@@ -1108,7 +1161,6 @@ safeSection("Seeds/Drops", function()
     local seedWant     = { Common = true, Uncommon = true, Rare = true, Epic = true, Elemental = true, Beast = true, Ancient = true, Mythical = true, Divine = true }
     local seedTP       = true
     local seedRange    = 12
-    local seedBank     = false
     local drops        = {}
     local stageLootPos = {}
     local scrollTokens = {}
@@ -1168,7 +1220,7 @@ safeSection("Seeds/Drops", function()
         Callback = function(v) seedTP = v end })
     Tabs.Seeds:AddSlider("SeedRange", { Title = "Pickup range (studs)", Min = 5, Max = 14, Default = 12, Rounding = 0,
         Callback = function(v) seedRange = v end })
-    Tabs.Seeds:AddToggle("SeedBank", { Title = "Auto bank when bag full (EndRun)", Default = false,
+    Tabs.Seeds:AddToggle("SeedBank", { Title = "Auto bank when bag full (EndRun)", Default = true,
         Callback = function(v) seedBank = v end })
 
     local function dropPos(m, token)
@@ -1193,7 +1245,11 @@ safeSection("Seeds/Drops", function()
             return
         end
         loop("seed", function() return 0.12 end, function()
-            if LocalPlayer:GetAttribute("InRaid") == true or bossActive then return end
+            if LocalPlayer:GetAttribute("InRaid") == true or bossActive or isBankingSeeds then return end
+            if seedBank and isSeedBagFull() then
+                triggerSeedBank()
+                return
+            end
             local char = LocalPlayer.Character
             local hrp = char and char:FindFirstChild("HumanoidRootPart")
             if not hrp then return end
@@ -1248,10 +1304,7 @@ safeSection("Seeds/Drops", function()
                                     drops[m] = nil
                                     stageLootPos[token] = nil
                                 elseif res.reason == "BagFull" and seedBank then
-                                    seedPickupCF = nil
-                                    seedPickupUntil = 0
-                                    fire("EndRun")
-                                    task.wait(1)
+                                    triggerSeedBank()
                                     break
                                 end
                             end
