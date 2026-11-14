@@ -989,6 +989,7 @@ safeSection("Farm Stage", function()
     local farmPosMode = "Above"
     local farmPosDist = 7
     local autoSkills  = true
+    local farmLoop    = false
 
     local pmDD = Tabs.Farm:AddDropdown("FarmPosMode", { Title = "Position relative to mob", Values = { "Above", "Below", "Behind" }, Default = "Above" })
     pmDD:OnChanged(function(v) farmPosMode = v end)
@@ -998,6 +999,9 @@ safeSection("Farm Stage", function()
 
     Tabs.Farm:AddToggle("AutoSkills", { Title = "Auto Use All Skills (Special / Utility / Haki)", Default = true,
         Callback = function(v) autoSkills = v end })
+
+    Tabs.Farm:AddToggle("FarmLoopEndRun", { Title = "Loop Farm (Auto EndRun at target stage)", Default = false,
+        Callback = function(v) farmLoop = v end })
 
     farmInstaToggle = Tabs.Farm:AddToggle("FarmInstaKillHP", {
         Title = "Insta Kill Mob at <= 80% HP (Instant Death)",
@@ -1166,6 +1170,30 @@ safeSection("Farm Stage", function()
                     noEnemySince = nil
                     lockedTargetCF = nil
                     farmSet(("You are in world %d, target world %d (use Travel > Set World)"):format(curW, farmWorld))
+                elseif farmLoop and run >= farmStage then
+                    lockedTargetCF = nil
+                    lockedStage = nil
+                    noEnemySince = nil
+                    if seedPickupCF and os.clock() < seedPickupUntil then
+                        farmSet("Picking up drops before loop EndRun...")
+                        task.wait(0.2)
+                    else
+                        farmSet(("Target stage %d cleared -> Looping (EndRun)..."):format(farmStage))
+                        pcall(function()
+                            local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+                            if hum then hum.PlatformStand = false end
+                        end)
+                        fire("EndRun")
+                        local tLoop = os.clock()
+                        while flags.walker and os.clock() - tLoop < 3.0 do
+                            if (tonumber(LocalPlayer:GetAttribute("RunStage")) or 0) == 0 then
+                                break
+                            end
+                            task.wait(0.15)
+                        end
+                        clearStage = 0
+                        task.wait(0.35)
+                    end
                 elseif hrp then
                     local s = (run < farmStage) and (run + 1) or farmStage
                     local center = stageCenter(s)
@@ -1705,6 +1733,28 @@ safeSection("World Boss", function()
         elevate()
         pcall(function() bossStatus:SetDesc(t) end)
     end
+    local function bossTimeStr()
+        local st = tostring(Workspace:GetAttribute("RaidState") or "Closed")
+        local now = Workspace:GetServerTimeNow()
+        if st == "Open" then
+            local cur = tostring(Workspace:GetAttribute("RaidBossId") or "?")
+            local endAt = tonumber(Workspace:GetAttribute("RaidPhaseEnd")) or 0
+            local rem = math.max(0, math.ceil(endAt - now))
+            return ("OPEN: %s (%02d:%02d left)"):format(cur, math.floor(rem / 60), rem % 60)
+        else
+            local nxt = tostring(Workspace:GetAttribute("RaidNextBossId") or "?")
+            local openAt = tonumber(Workspace:GetAttribute("RaidNextOpenAt")) or tonumber(Workspace:GetAttribute("RaidPhaseEnd")) or 0
+            local rem = math.max(0, math.ceil(openAt - now))
+            return ("Next: %s in %02d:%02d (%ds)"):format(nxt, math.floor(rem / 60), rem % 60, rem)
+        end
+    end
+    task.spawn(function()
+        while task.wait(1) do
+            if not flags.boss then
+                setStatus("Idle | " .. bossTimeStr())
+            end
+        end
+    end)
 
     local bossDD = Tabs.Boss:AddDropdown("BossSel", {
         Title   = "Bosses to fight",
@@ -1894,7 +1944,7 @@ safeSection("World Boss", function()
                         elseif state ~= "Open" or bossDead then
                             entered, tries = false, 0
                             bossActive = false
-                            setStatus("Waiting (next: " .. tostring(Workspace:GetAttribute("RaidNextBossId")) .. ")")
+                            setStatus("Waiting | " .. bossTimeStr())
                         end
                         if not entered and not bossActive then lastFarmCF = hrp.CFrame end
                     end
