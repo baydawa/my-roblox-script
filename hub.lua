@@ -1072,6 +1072,8 @@ safeSection("Farm Stage", function()
             local lockedTargetCF = nil
             local lockedStage = nil
             local wasInBoss = false
+            local bossReturnAt = nil
+            local endRunAfterBossDone = false
             local noEnemySince = nil
             local lastSpawnNudge = 0
 
@@ -1146,6 +1148,8 @@ safeSection("Farm Stage", function()
 
                 if inRaid or bossBusy then
                     wasInBoss = true
+                    bossReturnAt = nil
+                    endRunAfterBossDone = false
                     noEnemySince = nil
                     lockedTargetCF = nil
                     farmSet("Paused (boss)")
@@ -1168,6 +1172,8 @@ safeSection("Farm Stage", function()
 
                     if wasInBoss then
                         wasInBoss = false
+                        bossReturnAt = os.clock()
+                        endRunAfterBossDone = false
                         lockedTargetCF = nil
                         lockedStage = nil
                         noEnemySince = os.clock()
@@ -1203,9 +1209,31 @@ safeSection("Farm Stage", function()
 
                     if enemyPos then
                         noEnemySince = nil
+                        bossReturnAt = nil
+                        endRunAfterBossDone = false
                     else
                         noEnemySince = noEnemySince or os.clock()
-                        if (os.clock() - noEnemySince >= 1.2 or (stState and not stState.spawned)) and os.clock() - lastSpawnNudge >= 5.0 then
+                        if bossReturnAt and not endRunAfterBossDone and os.clock() - bossReturnAt >= 2.0 then
+                            endRunAfterBossDone = true
+                            bossReturnAt = nil
+                            lockedTargetCF = nil
+                            lockedStage = nil
+                            farmSet("No mobs after boss -> EndRun 1x to reset...")
+                            pcall(function()
+                                local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+                                if hum then hum.PlatformStand = false end
+                            end)
+                            fire("EndRun")
+                            local tEnd = os.clock()
+                            while flags.walker and os.clock() - tEnd < 3.0 do
+                                if (tonumber(LocalPlayer:GetAttribute("RunStage")) or 0) == 0 then
+                                    break
+                                end
+                                task.wait(0.15)
+                            end
+                            clearStage = 0
+                            task.wait(0.4)
+                        elseif (os.clock() - noEnemySince >= 1.2 or (stState and not stState.spawned)) and os.clock() - lastSpawnNudge >= 5.0 then
                             lastSpawnNudge = os.clock()
                             lockedTargetCF = nil
                             lockedStage = nil
