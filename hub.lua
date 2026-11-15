@@ -131,61 +131,86 @@ local uiUnloaded = false
 local toggleGui = nil
 local function setupUiGuard()
     elevate()
-    local parentRoot = (Fluent.GUI and Fluent.GUI.Parent) or CoreGui
+    local parentRoot = CoreGui
     local okHui, hui = pcall(function() return type(gethui) == "function" and gethui() or nil end)
-    if okHui and typeof(hui) == "Instance" then parentRoot = hui end
-
-    toggleGui = Instance.new("ScreenGui")
-    toggleGui.Name = "_PirateHubToggleGui"
-    toggleGui.DisplayOrder = 999999
-    toggleGui.ResetOnSpawn = false
-    toggleGui.IgnoreGuiInset = true
-    toggleGui.Parent = parentRoot
-
-    local btn = Instance.new("TextButton")
-    btn.Name = "TogglePirateHub"
-    btn.Size = UDim2.fromOffset(110, 32)
-    btn.Position = UDim2.new(0, 16, 0.5, -16)
-    btn.BackgroundColor3 = Color3.fromRGB(28, 30, 38)
-    btn.BorderSizePixel = 0
-    btn.Text = "Pirate Hub"
-    btn.TextColor3 = Color3.fromRGB(240, 240, 245)
-    btn.TextSize = 14
-    btn.Font = Enum.Font.GothamBold
-    btn.Active = true
-    btn.Draggable = true
-    btn.Parent = toggleGui
-
-    local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(0, 8)
-    corner.Parent = btn
-
-    local stroke = Instance.new("UIStroke")
-    stroke.Color = Color3.fromRGB(90, 165, 255)
-    stroke.Thickness = 1.5
-    stroke.Parent = btn
-
-    btn.MouseButton1Click:Connect(function()
-        elevate()
-        if uiUnloaded then return end
-        pcall(function()
-            if Fluent.GUI and Fluent.GUI:IsA("ScreenGui") then
-                Fluent.GUI.Enabled = true
-            end
-            if type(Window.Minimize) == "function" then
-                Window:Minimize()
-            elseif Window.Root and Window.Root:IsA("GuiObject") then
-                Window.Root.Visible = not Window.Root.Visible
-            end
-        end)
+    if okHui and typeof(hui) == "Instance" and not hui:IsA("ScreenGui") and hui.Name ~= "RobloxGui" then
+        parentRoot = hui
+    end
+    pcall(function()
+        if Fluent.GUI and Fluent.GUI:IsA("ScreenGui") and Fluent.GUI.Parent ~= parentRoot then
+            Fluent.GUI.Parent = parentRoot
+        end
     end)
+
+    local function buildToggleGui()
+        if toggleGui then pcall(function() toggleGui:Destroy() end) end
+        toggleGui = Instance.new("ScreenGui")
+        toggleGui.Name = "_PirateHubToggleGui"
+        toggleGui.DisplayOrder = 999999
+        toggleGui.ResetOnSpawn = false
+        toggleGui.IgnoreGuiInset = true
+        toggleGui.Parent = parentRoot
+
+        local btn = Instance.new("TextButton")
+        btn.Name = "TogglePirateHub"
+        btn.Size = UDim2.fromOffset(110, 32)
+        btn.Position = UDim2.new(0, 16, 0.5, -16)
+        btn.BackgroundColor3 = Color3.fromRGB(28, 30, 38)
+        btn.BorderSizePixel = 0
+        btn.Text = "Pirate Hub"
+        btn.TextColor3 = Color3.fromRGB(240, 240, 245)
+        btn.TextSize = 14
+        btn.Font = Enum.Font.GothamBold
+        btn.Active = true
+        btn.Draggable = true
+        btn.Parent = toggleGui
+
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0, 8)
+        corner.Parent = btn
+
+        local stroke = Instance.new("UIStroke")
+        stroke.Color = Color3.fromRGB(90, 165, 255)
+        stroke.Thickness = 1.5
+        stroke.Parent = btn
+
+        btn.MouseButton1Click:Connect(function()
+            elevate()
+            if uiUnloaded then return end
+            pcall(function()
+                if Fluent.GUI and Fluent.GUI:IsA("ScreenGui") then
+                    Fluent.GUI.Enabled = true
+                end
+                if type(Window.Minimize) == "function" then
+                    Window:Minimize()
+                elseif Window.Root and Window.Root:IsA("GuiObject") then
+                    Window.Root.Visible = not Window.Root.Visible
+                end
+                local cam = Workspace.CurrentCamera
+                local root = Window and Window.Root
+                if cam and root and root:IsA("GuiObject") and root.Visible then
+                    local vp = cam.ViewportSize
+                    local pos = root.AbsolutePosition
+                    local sz = root.AbsoluteSize
+                    if pos.X > vp.X - 40 or pos.Y > vp.Y - 40 or pos.X + sz.X < 40 or pos.Y + sz.Y < 40 then
+                        root.Position = UDim2.fromOffset(math.max(20, (vp.X - sz.X) * 0.5), math.max(20, (vp.Y - sz.Y) * 0.5))
+                    end
+                end
+            end)
+        end)
+    end
+    buildToggleGui()
 
     task.spawn(function()
         while not uiUnloaded do
             task.wait(1)
             elevate()
             pcall(function()
+                if not toggleGui or not toggleGui.Parent then
+                    buildToggleGui()
+                end
                 if Fluent.GUI and Fluent.GUI:IsA("ScreenGui") then
+                    if Fluent.GUI.Parent == nil then Fluent.GUI.Parent = parentRoot end
                     if not Fluent.GUI.Enabled then Fluent.GUI.Enabled = true end
                     if Fluent.GUI.DisplayOrder < 999999 then Fluent.GUI.DisplayOrder = 999999 end
                 end
@@ -1084,36 +1109,38 @@ safeSection("Farm Stage", function()
             local noclipConn
             pcall(function()
                 noclipConn = RunService.Heartbeat:Connect(function()
-                    if isBankingSeeds then
+                    pcall(function()
+                        if isBankingSeeds then
+                            local c = LocalPlayer.Character
+                            local hum = c and c:FindFirstChildOfClass("Humanoid")
+                            if hum and hum.PlatformStand then hum.PlatformStand = false end
+                            return
+                        end
+                        local activeSeedCF = (seedPickupCF and os.clock() < seedPickupUntil) and seedPickupCF or nil
+                        local desiredCF = activeSeedCF or lockedTargetCF
+                        if not flags.walker or not desiredCF then return end
                         local c = LocalPlayer.Character
-                        local hum = c and c:FindFirstChildOfClass("Humanoid")
-                        if hum and hum.PlatformStand then hum.PlatformStand = false end
-                        return
-                    end
-                    local activeSeedCF = (seedPickupCF and os.clock() < seedPickupUntil) and seedPickupCF or nil
-                    local desiredCF = activeSeedCF or lockedTargetCF
-                    if not flags.walker or not desiredCF then return end
-                    local c = LocalPlayer.Character
-                    if not c then return end
-                    local hrp = c:FindFirstChild("HumanoidRootPart")
-                    local hum = c:FindFirstChildOfClass("Humanoid")
-                    if hum and (farmPosMode == "Above" or farmPosMode == "Below") and not activeSeedCF then
-                        hum.PlatformStand = true
-                    elseif hum then
-                        hum.PlatformStand = false
-                    end
-                    if hrp then
-                        hrp.CFrame = desiredCF
-                        hrp.AssemblyLinearVelocity = Vector3.zero
-                        hrp.AssemblyAngularVelocity = Vector3.zero
-                    end
-                    if farmPosMode == "Below" and not activeSeedCF then
-                        for _, part in ipairs(c:GetDescendants()) do
-                            if part:IsA("BasePart") and part.CanCollide then
-                                part.CanCollide = false
+                        if not c then return end
+                        local hrp = c:FindFirstChild("HumanoidRootPart")
+                        local hum = c:FindFirstChildOfClass("Humanoid")
+                        if hum and (farmPosMode == "Above" or farmPosMode == "Below") and not activeSeedCF then
+                            hum.PlatformStand = true
+                        elseif hum then
+                            hum.PlatformStand = false
+                        end
+                        if hrp then
+                            hrp.CFrame = desiredCF
+                            hrp.AssemblyLinearVelocity = Vector3.zero
+                            hrp.AssemblyAngularVelocity = Vector3.zero
+                        end
+                        if farmPosMode == "Below" and not activeSeedCF then
+                            for _, part in ipairs(c:GetDescendants()) do
+                                if part:IsA("BasePart") and part.CanCollide then
+                                    part.CanCollide = false
+                                end
                             end
                         end
-                    end
+                    end)
                 end)
             end)
 
@@ -1129,6 +1156,7 @@ safeSection("Farm Stage", function()
 
             while flags.walker do
                 elevate()
+                local okTick, errTick = pcall(function()
                 local hrp = (LocalPlayer.Character or {}).FindFirstChild and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
                 local inRaid   = LocalPlayer:GetAttribute("InRaid") == true
                 local bossBusy = bossActive
@@ -1312,6 +1340,11 @@ safeSection("Farm Stage", function()
                         pcall(function() skillSigs.haki:Fire() end)
                         elevate()
                     end
+                end
+                end)
+                elevate()
+                if not okTick then
+                    warn("[Pirate Hub] StageWalker tick error: " .. tostring(errTick))
                 end
                 task.wait(0.15)
             end
@@ -1804,6 +1837,7 @@ safeSection("World Boss", function()
 
             while flags.boss do
                 elevate()
+                local okBoss, errBoss = pcall(function()
                 local hrp, hum = hrpOf()
                 local state    = Workspace:GetAttribute("RaidState")
                 local bossId   = Workspace:GetAttribute("RaidBossId")
@@ -1955,6 +1989,11 @@ safeSection("World Boss", function()
                             bossActive, returnCF = false, nil
                         end
                     end
+                end
+                end)
+                elevate()
+                if not okBoss then
+                    warn("[Pirate Hub] AutoBoss tick error: " .. tostring(errBoss))
                 end
                 task.wait(0.15)
             end
@@ -2298,11 +2337,50 @@ end)
 
 ---------------------------------------------------------------- 9. MISC TAB
 safeSection("Misc", function()
-    Tabs.Misc:AddToggle("AntiAFK", { Title = "Anti-AFK", Default = true, Callback = function(v) flags.afk = v end })
+    local function doAntiAfk()
+        elevate()
+        pcall(function()
+            local cam = Workspace.CurrentCamera
+            if cam then
+                VirtualUser:CaptureController()
+                VirtualUser:Button2Down(Vector2.new(0, 0), cam.CFrame)
+                task.wait(0.05)
+                VirtualUser:Button2Up(Vector2.new(0, 0), cam.CFrame)
+            end
+        end)
+        pcall(function()
+            local vim = game:GetService("VirtualInputManager")
+            vim:SendKeyEvent(true, Enum.KeyCode.Unknown, false, game)
+            vim:SendKeyEvent(false, Enum.KeyCode.Unknown, false, game)
+        end)
+    end
+    local function disableIdledConns()
+        if type(getconnections) == "function" then
+            pcall(function()
+                for _, c in ipairs(getconnections(LocalPlayer.Idled)) do
+                    if c.Function ~= doAntiAfk and type(c.Disable) == "function" then
+                        c:Disable()
+                    end
+                end
+            end)
+        end
+    end
+    Tabs.Misc:AddToggle("AntiAFK", { Title = "Anti-AFK", Default = true, Callback = function(v)
+        flags.afk = v
+        if v then disableIdledConns() end
+    end })
+    disableIdledConns()
     LocalPlayer.Idled:Connect(function()
         if flags.afk then
-            VirtualUser:CaptureController()
-            VirtualUser:ClickButton2(Vector2.new())
+            doAntiAfk()
+        end
+    end)
+    task.spawn(function()
+        while not uiUnloaded do
+            task.wait(60)
+            if flags.afk then
+                doAntiAfk()
+            end
         end
     end)
     flags.afk = true
