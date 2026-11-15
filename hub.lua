@@ -277,6 +277,7 @@ local flags = {
     walker      = false,
     farmlock    = false,
     claim       = false,
+    freegifts   = false,
     adminmeteor = true,
     upgrade     = false,
     afk         = true,
@@ -2164,11 +2165,98 @@ end)
 
 ---------------------------------------------------------------- 6. REWARDS & CODES TAB
 safeSection("Rewards", function()
+    local PlaytimeCfg
+    pcall(function() PlaytimeCfg = require(Shared.Configs.PlaytimeRewardsConfig) end)
+    elevate()
+
+    local giftDefs = {
+        { id = "Gift5",  label = "5m",  daily = 12 },
+        { id = "Gift15", label = "15m", daily = 8 },
+        { id = "Gift60", label = "60m", daily = 4 },
+    }
+    if PlaytimeCfg and type(PlaytimeCfg.Tiers) == "table" then
+        local parsed = {}
+        for _, t in ipairs(PlaytimeCfg.Tiers) do
+            if type(t) == "table" and t.id then
+                table.insert(parsed, {
+                    id = t.id,
+                    label = (t.every and (math.floor(t.every / 60) .. "m")) or tostring(t.title or t.id),
+                    daily = tonumber(t.daily) or 0,
+                })
+            end
+        end
+        if #parsed > 0 then giftDefs = parsed end
+    end
+
+    local giftStatus = Tabs.Rewards:AddParagraph({ Title = "Free Gifts (5m / 15m / 60m)", Content = "checking..." })
+    local function fmtGiftTime(sec)
+        sec = math.max(0, math.ceil(sec))
+        return ("%02d:%02d"):format(math.floor(sec / 60), sec % 60)
+    end
+
+    local function checkAndClaimFreeGifts(doClaim)
+        local ok, st = invoke("GetGiftState")
+        if not ok or type(st) ~= "table" or type(st.tiers) ~= "table" then
+            pcall(function() giftStatus:SetDesc("Unable to fetch gift state") end)
+            return 0
+        end
+        local elapsed = tonumber(st.elapsed) or 0
+        local claimed = 0
+        local parts = {}
+        for _, def in ipairs(giftDefs) do
+            local t = st.tiers[def.id]
+            if type(t) == "table" then
+                local used = tonumber(t.used) or 0
+                local left = math.max(0, def.daily - used)
+                local at = tonumber(t.at) or 0
+                if left <= 0 then
+                    table.insert(parts, ("%s: 0/%d"):format(def.label, def.daily))
+                elseif elapsed >= at then
+                    if doClaim then
+                        local okC, resC = invoke("ClaimGift", def.id)
+                        if okC and type(resC) == "table" and resC.ok then
+                            claimed += 1
+                            left = math.max(0, left - 1)
+                            table.insert(parts, ("%s: %d/%d (CLAIMED)"):format(def.label, left, def.daily))
+                        else
+                            table.insert(parts, ("%s: %d/%d (READY)"):format(def.label, left, def.daily))
+                        end
+                    else
+                        table.insert(parts, ("%s: %d/%d (READY)"):format(def.label, left, def.daily))
+                    end
+                else
+                    table.insert(parts, ("%s: %d/%d (%s)"):format(def.label, left, def.daily, fmtGiftTime(at - elapsed)))
+                end
+            end
+        end
+        pcall(function() giftStatus:SetDesc(table.concat(parts, " | ")) end)
+        return claimed
+    end
+    task.spawn(function() elevate(); checkAndClaimFreeGifts(false) end)
+
+    Tabs.Rewards:AddButton({ Title = "Claim Free Gifts Now", Description = "Every 5m / 15m / 60m", Callback = function()
+        task.spawn(function()
+            elevate()
+            local n = checkAndClaimFreeGifts(true)
+            notify("Free Gifts", n > 0 and ("Claimed " .. n .. " gift(s)!") or "No ready gifts right now")
+        end)
+    end })
+
+    Tabs.Rewards:AddToggle("AutoFreeGifts", { Title = "Auto Claim Free Gifts (5m / 15m / 60m)", Default = false, Callback = function(v)
+        flags.freegifts = v
+        if v then
+            loop("freegifts", function() return 10 end, function()
+                checkAndClaimFreeGifts(true)
+            end)
+        end
+    end })
+
     local function claimAll()
         fire("ClaimDailyReward")
         fire("ClaimGroupReward")
         fire("ClaimOfflineReward")
         fire("ClaimAllSeasonRewards")
+        checkAndClaimFreeGifts(true)
     end
 
     Tabs.Rewards:AddButton({ Title = "Claim all now", Description = "Daily / Group / Offline / Season Pass", Callback = function()
