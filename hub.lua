@@ -2490,10 +2490,116 @@ safeSection("Misc", function()
         end
     end)
 
+    local UserInputService = game:GetService("UserInputService")
+    local Lighting = game:GetService("Lighting")
+    local disable3dManual = false
+    local autoMinimizeLowRam = false
+    local focusLostConn, focusGainConn
+
+    local function applyRenderState(isLow)
+        elevate()
+        pcall(function() RunService:Set3dRenderingEnabled(not isLow) end)
+        if type(setfpscap) == "function" then
+            pcall(setfpscap, isLow and 10 or 60)
+        end
+        if isLow then
+            pcall(gcinfo)
+        end
+    end
+
+    local function applyPotatoGraphics()
+        elevate()
+        pcall(function() settings().Rendering.QualityLevel = Enum.QualityLevel.Level01 end)
+        pcall(function()
+            Lighting.GlobalShadows = false
+            Lighting.FogEnd = 9e9
+            for _, eff in ipairs(Lighting:GetChildren()) do
+                if eff:IsA("PostEffect") or eff:IsA("Atmosphere") then
+                    eff.Enabled = false
+                end
+            end
+        end)
+        pcall(function()
+            local terr = Workspace:FindFirstChildOfClass("Terrain")
+            if terr then
+                terr.WaterWaveSize = 0
+                terr.WaterWaveSpeed = 0
+                terr.WaterReflectance = 0
+                terr.WaterTransparency = 0
+                terr.Decoration = false
+            end
+            for _, inst in ipairs(Workspace:GetDescendants()) do
+                if inst:IsA("ParticleEmitter") or inst:IsA("Trail") or inst:IsA("Beam") or inst:IsA("Sparkles") or inst:IsA("Fire") or inst:IsA("Smoke") then
+                    inst.Enabled = false
+                end
+            end
+        end)
+        pcall(gcinfo)
+    end
+
+    Tabs.Misc:AddToggle("AutoMinimizeLowRam", {
+        Title = "Auto Low RAM when Window Minimized / Unfocused",
+        Description = "Disables 3D render + caps 10 FPS when alt-tabbed/minimized",
+        Default = false,
+        Callback = function(v)
+            autoMinimizeLowRam = v
+            if focusLostConn then pcall(function() focusLostConn:Disconnect() end); focusLostConn = nil end
+            if focusGainConn then pcall(function() focusGainConn:Disconnect() end); focusGainConn = nil end
+            if v then
+                focusLostConn = UserInputService.WindowFocusReleased:Connect(function()
+                    if autoMinimizeLowRam then
+                        applyRenderState(true)
+                    end
+                end)
+                focusGainConn = UserInputService.WindowFocused:Connect(function()
+                    if not disable3dManual then
+                        applyRenderState(false)
+                    end
+                end)
+            elseif not disable3dManual then
+                applyRenderState(false)
+            end
+        end,
+    })
+
+    Tabs.Misc:AddToggle("Disable3DRender", {
+        Title = "Disable 3D Render (Max RAM/GPU Save)",
+        Default = false,
+        Callback = function(v)
+            disable3dManual = v
+            applyRenderState(v)
+        end,
+    })
+
+    Tabs.Misc:AddToggle("AutoGC", {
+        Title = "Auto Free RAM (GC every 30s)",
+        Default = false,
+        Callback = function(v)
+            flags.autogc = v
+            if v then
+                loop("autogc", function() return 30 end, function()
+                    pcall(gcinfo)
+                end)
+            end
+        end,
+    })
+
+    Tabs.Misc:AddButton({
+        Title = "Low Graphics + Clear Effects (Reduce RAM)",
+        Description = "Quality 1, disable shadows, particles, trails & run GC",
+        Callback = function()
+            applyPotatoGraphics()
+            notify("Low RAM", "Applied low graphics & freed memory")
+        end,
+    })
+
     Tabs.Misc:AddButton({ Title = "Unload", Callback = function()
         elevate()
         uiUnloaded = true
         for k in pairs(flags) do flags[k] = false end
+        if focusLostConn then pcall(function() focusLostConn:Disconnect() end) end
+        if focusGainConn then pcall(function() focusGainConn:Disconnect() end) end
+        applyRenderState(false)
         pcall(function()
             if cachedECtrl and cachedECtrl._origApplyDamage then
                 cachedECtrl.ApplyDamage = cachedECtrl._origApplyDamage
